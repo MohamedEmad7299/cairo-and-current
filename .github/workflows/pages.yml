@@ -1,5 +1,7 @@
 name: Publish GitHub Pages
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
 permissions:
   contents: read
@@ -25,7 +27,9 @@ jobs:
         env:
           VITE_API_URL: ${{ vars.API_URL }}
         run: |
-          test -n "$VITE_API_URL" || { echo 'Set the API_URL repository variable before publishing.'; exit 1; }
+          if [ -z "$VITE_API_URL" ]; then
+            echo "::warning::API_URL repository variable is not set. Frontend will build in standalone preview mode."
+          fi
           npm run build
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
