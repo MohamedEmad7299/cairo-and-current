@@ -80,7 +80,9 @@ async function route(req,env) {
   const session=await auth(req,env); const {search,from,to}=filters(url);
   const page=Math.max(1,Math.min(100000,Number.parseInt(url.searchParams.get('page'))||1)); const size=20;
   if(session.role==='viewer') {
-   const rows=await env.DB.prepare('SELECT name FROM records WHERE instr(lower(name),lower(?))>0 ORDER BY name LIMIT ? OFFSET ?').bind(search,size+1,(page-1)*size).all();
+   const where="instr(lower(r.name),lower(?))>0 AND ((?='' AND ?='') OR EXISTS(SELECT 1 FROM scans s WHERE s.record_id=r.id AND (?='' OR s.scanned_at>=?) AND (?='' OR s.scanned_at<=?)))";
+   const params=[search,from,to,from,from+'T00:00:00.000Z',to,to+'T23:59:59.999Z'];
+   const rows=await env.DB.prepare(`SELECT r.id, r.name, r.active, r.created_at, (SELECT count(*) FROM scans s WHERE s.record_id=r.id) scan_count, (SELECT max(scanned_at) FROM scans s WHERE s.record_id=r.id) last_scan FROM records r WHERE ${where} ORDER BY r.created_at DESC LIMIT ? OFFSET ?`).bind(...params,size+1,(page-1)*size).all();
    return json({items:rows.results.slice(0,size),hasMore:rows.results.length>size});
   }
   const where="(instr(lower(r.name),lower(?))>0 OR instr(r.mobile,?)>0) AND ((?='' AND ?='') OR EXISTS(SELECT 1 FROM scans s WHERE s.record_id=r.id AND (?='' OR s.scanned_at>=?) AND (?='' OR s.scanned_at<=?)))";
@@ -89,7 +91,7 @@ async function route(req,env) {
   return json({items:rows.results.slice(0,size),hasMore:rows.results.length>size});
  }
  if(path==='/api/stats'&&method==='GET') {
-  await auth(req,env,true);
+  await auth(req,env);
   const summary=await env.DB.prepare('SELECT (SELECT count(*) FROM records) records,(SELECT count(*) FROM scans) scans,(SELECT count(DISTINCT record_id) FROM scans) visited,(SELECT count(*) FROM records WHERE active=1) active').first();
   const days=await env.DB.prepare("SELECT substr(scanned_at,1,10) day,count(*) count FROM scans WHERE scanned_at>=? GROUP BY day ORDER BY day").bind(new Date(Date.now()-13*86400000).toISOString().slice(0,10)).all();return json({...summary,days:days.results});
  }
