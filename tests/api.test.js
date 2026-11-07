@@ -32,3 +32,26 @@ test('concurrent identical scan submissions remain idempotent',async()=>{const r
 test('logout invalidates session server-side',async()=>{assert.equal((await request('/api/logout',{token:viewer,method:'POST'})).status,200);assert.equal((await request('/api/records',{token:viewer})).status,401);});
 test('expired session cannot be reused',async()=>{await db.prepare('UPDATE sessions SET expires_at=0').run();assert.equal((await request('/api/records',{token:admin})).status,401);});
 test('repeated incorrect access codes are rate limited',async()=>{let result;for(let i=0;i<11;i++)result=await request('/api/login',{method:'POST',body:{code:'wrong-code'}});assert.equal(result.status,429);});
+test('password change security: permissions, old password verification, and role updates',async()=>{
+ await db.prepare('DELETE FROM rate_limits').run();
+ const adminToken=(await request('/api/login',{method:'POST',body:{code:TEST_ADMIN}})).data.token;
+ const viewerToken=(await request('/api/login',{method:'POST',body:{code:TEST_VIEWER}})).data.token;
+ assert.equal((await request('/api/password',{method:'POST',body:{target:'viewer',currentCode:TEST_ADMIN,newCode:'newViewerPass123'}})).status,401);
+ assert.equal((await request('/api/password',{token:viewerToken,method:'POST',body:{target:'viewer',currentCode:TEST_ADMIN,newCode:'newViewerPass123'}})).status,403);
+ const badCurrent=await request('/api/password',{token:adminToken,method:'POST',body:{target:'viewer',currentCode:'wrongAdminPass',newCode:'newViewerPass123'}});
+ assert.equal(badCurrent.status,401);
+ const shortCode=await request('/api/password',{token:adminToken,method:'POST',body:{target:'viewer',currentCode:TEST_ADMIN,newCode:'short'}});
+ assert.equal(shortCode.status,400);
+ const updateViewer=await request('/api/password',{token:adminToken,method:'POST',body:{target:'viewer',currentCode:TEST_ADMIN,newCode:'newViewerPass123'}});
+ assert.equal(updateViewer.status,200);
+ assert.equal((await request('/api/login',{method:'POST',body:{code:TEST_VIEWER}})).status,401);
+ const newViewerRes=await request('/api/login',{method:'POST',body:{code:'newViewerPass123'}});
+ assert.equal(newViewerRes.status,200);
+ assert.equal(newViewerRes.data.role,'viewer');
+ const updateAdmin=await request('/api/password',{token:adminToken,method:'POST',body:{target:'admin',currentCode:TEST_ADMIN,newCode:'newAdminPass123'}});
+ assert.equal(updateAdmin.status,200);
+ assert.equal((await request('/api/login',{method:'POST',body:{code:TEST_ADMIN}})).status,401);
+ const newAdminRes=await request('/api/login',{method:'POST',body:{code:'newAdminPass123'}});
+ assert.equal(newAdminRes.status,200);
+ assert.equal(newAdminRes.data.role,'admin');
+});

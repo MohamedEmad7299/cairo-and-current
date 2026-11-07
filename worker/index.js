@@ -23,6 +23,14 @@ async function auth(req,env,admin=false) {
  if(admin && session.role!=='admin') fail('Administrator access required.',403);
  return session;
 }
+async function getCodeHashes(env) {
+ const rows=await env.DB.prepare("SELECT key,value FROM settings WHERE key IN ('admin_code_hash','viewer_code_hash')").all();
+ const map=Object.fromEntries((rows?.results||[]).map(r=>[r.key,r.value]));
+ return {
+  adminHash: map.admin_code_hash || env.ADMIN_CODE_HASH,
+  viewerHash: map.viewer_code_hash || env.VIEWER_CODE_HASH
+ };
+}
 function filters(url) {
  const search=(url.searchParams.get('q')||'').slice(0,100);
  const from=url.searchParams.get('from')||'', to=url.searchParams.get('to')||'';
@@ -43,7 +51,8 @@ async function route(req,env) {
   const ip=req.headers.get('CF-Connecting-IP')||'local';
   await limit(env,'login:'+await digest(env.PASSWORD_SALT+ip),10,900);
   const hash=await passwordHash(code,env.PASSWORD_SALT);
-  const role=equal(hash,env.ADMIN_CODE_HASH)?'admin':equal(hash,env.VIEWER_CODE_HASH)?'viewer':null;
+  const {adminHash, viewerHash}=await getCodeHashes(env);
+  const role=equal(hash,adminHash)?'admin':equal(hash,viewerHash)?'viewer':null;
   if(!role) fail('Access code not recognized.',401);
   const token=crypto.randomUUID()+crypto.randomUUID(); const expiresAt=Date.now()+8*3600*1000;
   await env.DB.batch([
@@ -56,6 +65,32 @@ async function route(req,env) {
  if(path==='/api/session'&&method==='GET') return json(await auth(req,env));
  if(path==='/api/logout'&&method==='POST') {
   await auth(req,env); await env.DB.prepare('DELETE FROM sessions WHERE hash=?').bind(await digest(req.headers.get('Authorization').slice(7))).run(); return json({ok:true});
+ }
+ if(path==='/api/password'&&method==='POST') {
+  await auth(req,env,true);
+  const {target,currentCode,newCode}=await body(req);
+  if(target!=='admin'&&target!=='viewer') fail('Target must be administrator or viewer.');
+  if(typeof currentCode!=='string'||!currentCode) fail('Enter your current administrator access code.');
+  if(typeof newCode!=='string'||newCode.length<8||newCode.length>200) fail('New access code must contain 8–200 characters.');
+  if(currentCode===newCode) fail('New access code must be different from current code.');
+  const ip=req.headers.get('CF-Connecting-IP')||'local';
+  await limit(env,'pwd:'+await digest(env.PASSWORD_SALT+ip),5,900);
+  const {adminHash}=await getCodeHashes(env);
+  const currentHash=await passwordHash(currentCode,env.PASSWORD_SALT);
+  if(!equal(currentHash,adminHash)) fail('Current administrator access code is incorrect.',401);
+  const newHash=await passwordHash(newCode,env.PASSWORD_SALT);
+  const key=target==='admin'?'admin_code_hash':'viewer_code_hash';
+  const queries=[
+   env.DB.prepare('INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').bind(key,newHash)
+  ];
+  if(target==='viewer'){
+   queries.push(env.DB.prepare('DELETE FROM sessions WHERE role="viewer"'));
+  }else{
+   const currentToken=req.headers.get('Authorization')?.replace(/^Bearer /,'');
+   queries.push(env.DB.prepare('DELETE FROM sessions WHERE role="admin" AND hash!=?').bind(await digest(currentToken)));
+  }
+  await env.DB.batch(queries);
+  return json({ok:true,target,message:target==='admin'?'Administrator access code updated.':'Viewer access code updated.'});
  }
  if(path==='/api/scan'&&method==='POST') {
   const {token,eventId}=await body(req);

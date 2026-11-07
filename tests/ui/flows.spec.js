@@ -34,6 +34,43 @@ test('team access navigation and footer margins on all pages',async({page})=>{
   await page.locator('#team-access-link').click();
   await expect(page).toHaveURL(/#\/dashboard/);
 });
+test('admin can open security modal and change access codes with validation',async({page})=>{
+  await signIn(page,'local-admin-demo','dashboard');
+  const btn=page.locator('#change-passwords');
+  await expect(btn).toBeVisible();
+  await btn.click();
+  await expect(page.locator('#password-form')).toBeVisible();
+
+  await page.locator('#pwd-target').selectOption('viewer');
+  
+  // Test validation on mismatch
+  await page.locator('#pwd-current').fill('local-admin-demo');
+  await page.locator('#pwd-new').fill('newViewerSecret1234');
+  await page.locator('#pwd-confirm').fill('differentSecret1234');
+  await page.locator('#password-form button[type=submit]').click();
+  await expect(page.locator('#password-error')).toContainText('not match');
+
+  // Test reveal buttons
+  const revealBtn=page.locator('.reveal-btn[data-target="pwd-new"]');
+  await revealBtn.click();
+  await expect(page.locator('#pwd-new')).toHaveAttribute('type','text');
+  await revealBtn.click();
+  await expect(page.locator('#pwd-new')).toHaveAttribute('type','password');
+
+  // Submit valid update for viewer
+  await page.locator('#pwd-confirm').fill('newViewerSecret1234');
+  await page.locator('#password-form button[type=submit]').click();
+  await expect(page.locator('#toast')).toContainText('updated');
+
+  // Restore viewer code so subsequent tests remain unaffected
+  await btn.click();
+  await page.locator('#pwd-target').selectOption('viewer');
+  await page.locator('#pwd-current').fill('local-admin-demo');
+  await page.locator('#pwd-new').fill('local-viewer-demo');
+  await page.locator('#pwd-confirm').fill('local-viewer-demo');
+  await page.locator('#password-form button[type=submit]').click();
+  await expect(page.locator('#toast')).toContainText('updated');
+});
 
 
 
