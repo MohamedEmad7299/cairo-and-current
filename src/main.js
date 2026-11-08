@@ -26,7 +26,7 @@ function footer(){
  const teamOrExplore=isTeam
   ?`<a href="#/tours">Explore experiences ${icon('arrow')}</a>`
   :`<a href="#/dashboard" id="team-access-link">Team access ${icon('arrow')}</a>`;
- return `<footer class="site-footer"><div class="footer-row"><span>Made for curious souls. Rooted in Cairo.</span><span class="footer-nav"><a href="#/privacy">Privacy & image credits</a>${teamOrExplore}</span></div>${contactsHtml}</footer>`;
+ return `<footer class="site-footer"><div class="footer-row"><span>Made for curious souls. Rooted in Egypt.</span><span class="footer-nav"><a href="#/privacy">Privacy & image credits</a>${teamOrExplore}</span></div>${contactsHtml}</footer>`;
 }
 function shell(active,content){
  const isGuest=Boolean(session?.record_id);
