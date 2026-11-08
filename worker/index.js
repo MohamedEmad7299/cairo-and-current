@@ -5,6 +5,16 @@ export function generateViewPass() {
  const bytes = crypto.getRandomValues(new Uint8Array(8));
  return 'guest_' + Array.from(bytes, b => PASS_ALPHABET[b % PASS_ALPHABET.length]).join('');
 }
+export function getCairoOffsetHours(d = new Date()) {
+ try {
+  const cairoStr = new Intl.DateTimeFormat('en-US', { timeZone: 'Africa/Cairo', year:'numeric', month:'numeric', day:'numeric', hour:'numeric', minute:'numeric', second:'numeric', hour12: false }).format(d);
+  const utcStr = new Intl.DateTimeFormat('en-US', { timeZone: 'UTC', year:'numeric', month:'numeric', day:'numeric', hour:'numeric', minute:'numeric', second:'numeric', hour12: false }).format(d);
+  const diffMs = new Date(cairoStr) - new Date(utcStr);
+  return Math.round(diffMs / 3600000);
+ } catch {
+  return 2;
+ }
+}
 export async function digest(value) {return Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', enc.encode(value))), b => b.toString(16).padStart(2, '0')).join('');}
 export async function passwordHash(value, salt) {
  const key = await crypto.subtle.importKey('raw', enc.encode(value), 'PBKDF2', false, ['deriveBits']);
@@ -146,15 +156,16 @@ async function route(req,env) {
    return json({items:rows.results||[],hasMore:false});
   }
   const {search,from,to}=filters(url);
+  const offset=getCairoOffsetHours();
   const page=Math.max(1,Math.min(100000,Number.parseInt(url.searchParams.get('page'))||1)); const size=20;
   if(session.role==='viewer') {
-   const where="instr(lower(r.name),lower(?))>0 AND ((?='' AND ?='') OR EXISTS(SELECT 1 FROM scans s WHERE s.record_id=r.id AND (?='' OR s.scanned_at>=?) AND (?='' OR s.scanned_at<=?)))";
-   const params=[search,from,to,from,from+'T00:00:00.000Z',to,to+'T23:59:59.999Z'];
+   const where="instr(lower(r.name),lower(?))>0 AND ((?='' AND ?='') OR EXISTS(SELECT 1 FROM scans s WHERE s.record_id=r.id AND (?='' OR strftime('%Y-%m-%d', s.scanned_at, '+' || ? || ' hours')>=?) AND (?='' OR strftime('%Y-%m-%d', s.scanned_at, '+' || ? || ' hours')<=?)))";
+   const params=[search,from,to,from,offset,from,to,offset,to];
    const rows=await env.DB.prepare(`SELECT r.id, r.name, r.active, r.created_at, (SELECT count(*) FROM scans s WHERE s.record_id=r.id) scan_count, (SELECT max(scanned_at) FROM scans s WHERE s.record_id=r.id) last_scan FROM records r WHERE ${where} ORDER BY r.created_at DESC LIMIT ? OFFSET ?`).bind(...params,size+1,(page-1)*size).all();
    return json({items:rows.results.slice(0,size),hasMore:rows.results.length>size});
   }
-  const where="(instr(lower(r.name),lower(?))>0 OR instr(r.mobile,?)>0) AND ((?='' AND ?='') OR EXISTS(SELECT 1 FROM scans s WHERE s.record_id=r.id AND (?='' OR s.scanned_at>=?) AND (?='' OR s.scanned_at<=?)))";
-  const params=[search,search,from,to,from,from+'T00:00:00.000Z',to,to+'T23:59:59.999Z'];
+  const where="(instr(lower(r.name),lower(?))>0 OR instr(r.mobile,?)>0) AND ((?='' AND ?='') OR EXISTS(SELECT 1 FROM scans s WHERE s.record_id=r.id AND (?='' OR strftime('%Y-%m-%d', s.scanned_at, '+' || ? || ' hours')>=?) AND (?='' OR strftime('%Y-%m-%d', s.scanned_at, '+' || ? || ' hours')<=?)))";
+  const params=[search,search,from,to,from,offset,from,to,offset,to];
   const rows=await env.DB.prepare(`SELECT r.id, r.token, r.name, r.mobile, r.active, r.created_at, r.view_code, (SELECT count(*) FROM scans s WHERE s.record_id=r.id) scan_count, (SELECT max(scanned_at) FROM scans s WHERE s.record_id=r.id) last_scan FROM records r WHERE ${where} ORDER BY r.created_at DESC LIMIT ? OFFSET ?`).bind(...params,size+1,(page-1)*size).all();
   const items=rows.results.slice(0,size);
   for(const item of items) {
@@ -168,15 +179,16 @@ async function route(req,env) {
  }
  if(path==='/api/stats'&&method==='GET') {
   const session=await auth(req,env);
-  const cutoff=new Date(Date.now()-13*86400000).toISOString().slice(0,10);
+  const offset=getCairoOffsetHours();
+  const cutoff=new Date(Date.now()-15*86400000).toISOString();
   if(session.record_id) {
    const scansCount=(await env.DB.prepare('SELECT count(*) c FROM scans WHERE record_id=?').bind(session.record_id).first())?.c||0;
    const rec=await env.DB.prepare('SELECT active FROM records WHERE id=?').bind(session.record_id).first();
-   const days=await env.DB.prepare("SELECT substr(scanned_at,1,10) day,count(*) count FROM scans WHERE record_id=? AND scanned_at>=? GROUP BY day ORDER BY day").bind(session.record_id,cutoff).all();
+   const days=await env.DB.prepare("SELECT strftime('%Y-%m-%d', scanned_at, '+' || ? || ' hours') day, count(*) count FROM scans WHERE record_id=? AND scanned_at>=? GROUP BY day ORDER BY day").bind(offset,session.record_id,cutoff).all();
    return json({records:1,scans:scansCount,visited:scansCount>0?1:0,active:rec?.active?1:0,days:days.results||[]});
   }
   const summary=await env.DB.prepare('SELECT (SELECT count(*) FROM records) records,(SELECT count(*) FROM scans) scans,(SELECT count(DISTINCT record_id) FROM scans) visited,(SELECT count(*) FROM records WHERE active=1) active').first();
-  const days=await env.DB.prepare("SELECT substr(scanned_at,1,10) day,count(*) count FROM scans WHERE scanned_at>=? GROUP BY day ORDER BY day").bind(cutoff).all();
+  const days=await env.DB.prepare("SELECT strftime('%Y-%m-%d', scanned_at, '+' || ? || ' hours') day, count(*) count FROM scans WHERE scanned_at>=? GROUP BY day ORDER BY day").bind(offset,cutoff).all();
   return json({...summary,days:days.results});
  }
  if(path==='/api/export'&&method==='GET') {
