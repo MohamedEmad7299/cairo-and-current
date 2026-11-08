@@ -1,7 +1,7 @@
 export const AIRBNB_URL = 'https://www.airbnb.com/experiences/6840710';
 export const DEFAULT_COPY = {
  khan: 'Your personal Cairo shopping buddy.\nTell me what you want to find and we explore markets at an unrushed pace. I negotiate true local prices, avoid traps, and treat you to authentic Egyptian Meal.',
- kayak: 'A different rhythm of Cairo is coming. Join us for a kayaking experience on Egypt’s Nile and discover the city from the water. Full details will be announced soon.'
+ kayak: 'Launch your tour with a safety briefing, get fitted with gear, learn basic paddling with academy pros on calm water, soak up Nile views, then land back at the dock for drinks. Perfect for all levels.'
 };
 export function validateRecord(value) {
  const name = typeof value.name === 'string' ? value.name.trim().replace(/\s+/g, ' ') : '';
