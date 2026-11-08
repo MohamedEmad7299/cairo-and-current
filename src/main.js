@@ -120,13 +120,14 @@ async function loadRecords(){
   const admin=session?.role==='admin';
   const isGuest=Boolean(session?.record_id);
   if(isGuest){
-   el.innerHTML=records.length?`<div class="table-wrap"><table><thead><tr><th>Guest name</th><th>Date · Cairo</th><th>Time · Cairo</th><th>Day</th><th>Status</th></tr></thead><tbody>${records.map((r,i)=>{
-    if(!r.scanned_at)return `<tr><td><span class="avatar">${h(r.name.slice(0,1).toUpperCase())}</span><strong>${h(r.name)}</strong></td><td colspan="3"><span class="muted">No visits recorded yet. Scan your personal QR code to add visits.</span></td><td><span class="status ${r.active?'':'inactive'}">${r.active?'Active':'Disabled'}</span></td></tr>`;
+   el.innerHTML=records.length?`<div class="table-wrap"><table><thead><tr><th>Scan</th><th>Date · Cairo</th><th>Time · Cairo</th><th>Day</th><th>Status</th></tr></thead><tbody>${records.map((r,i)=>{
+    if(!r.scanned_at)return `<tr><td><span class="avatar">—</span><strong>No scans yet</strong><span class="sr-only">${h(r.name)}</span></td><td colspan="3"><span class="muted">No visits recorded yet. Scan your personal QR code to add visits.</span></td><td><span class="status ${r.active?'':'inactive'}">${r.active?'Active':'Disabled'}</span></td></tr>`;
     const d=new Date(r.scanned_at);
     const dateStr=new Intl.DateTimeFormat('en-GB',{timeZone:'Africa/Cairo',day:'numeric',month:'short',year:'numeric'}).format(d);
     const timeStr=new Intl.DateTimeFormat('en-GB',{timeZone:'Africa/Cairo',hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false}).format(d);
     const dayStr=new Intl.DateTimeFormat('en-GB',{timeZone:'Africa/Cairo',weekday:'long'}).format(d);
-    return `<tr><td><span class="avatar">${h(r.name.slice(0,1).toUpperCase())}</span><strong>${h(r.name)}</strong></td><td>${h(dateStr)}</td><td>${h(timeStr)}</td><td>${h(dayStr)}</td><td><span class="status">Recorded</span></td></tr>`;
+    const scanNum=r.scan_count?(r.scan_count-((page-1)*50+i)):((page-1)*50+i+1);
+    return `<tr><td><span class="avatar">${scanNum}</span><strong>Scan ${scanNum}</strong><span class="sr-only">${h(r.name)}</span></td><td>${h(dateStr)}</td><td>${h(timeStr)}</td><td>${h(dayStr)}</td><td><span class="status">Recorded</span></td></tr>`;
    }).join('')}</tbody></table></div>`:'<div class="empty"><span>◌</span><h3>No visits found.</h3></div>';
   }else{
    el.innerHTML=records.length?`<div class="table-wrap"><table><thead><tr><th>Guest name</th>${admin?'<th>Mobile</th><th>Viewing pass</th>':''}<th>QR visits</th><th>Last scan · Cairo</th><th>Status</th><th><span class="sr-only">Actions</span></th></tr></thead><tbody>${records.map((r,i)=>`<tr><td><span class="avatar">${h(r.name.slice(0,1).toUpperCase())}</span><strong>${h(r.name)}</strong></td>${admin?`<td>${h(r.mobile)||'<span class="muted">Not provided</span>'}</td><td><code class="pass-code">${h(r.view_code||'—')}</code></td>`:''}<td>${r.scan_count??0}</td><td>${h(time(r.last_scan))}</td><td><span class="status ${r.active?'':'inactive'}">${r.active?'Active':'Disabled'}</span></td><td>${admin?`<button data-record="${i}" aria-label="Manage ${h(r.name)}">Manage ↗</button>`:''}</td></tr>`).join('')}</tbody></table></div>`:'<div class="empty"><span>◌</span><h3>No guests found.</h3><p>Create an invitation or try another search.</p></div>';
