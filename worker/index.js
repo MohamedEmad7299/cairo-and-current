@@ -152,8 +152,11 @@ async function route(req,env) {
  if(path==='/api/records'&&method==='GET') {
   const session=await auth(req,env);
   if(session.record_id) {
-   const rows=await env.DB.prepare('SELECT r.id, r.name, r.active, r.created_at, (SELECT count(*) FROM scans s WHERE s.record_id=r.id) scan_count, (SELECT max(scanned_at) FROM scans s WHERE s.record_id=r.id) last_scan FROM records r WHERE r.id=?').bind(session.record_id).all();
-   return json({items:rows.results||[],hasMore:false});
+   const offset=getCairoOffsetHours();
+   const page=Math.max(1,Math.min(100000,Number.parseInt(url.searchParams.get('page'))||1));
+   const size=50;
+   const rows=await env.DB.prepare(`SELECT r.id, r.name, r.active, r.created_at, s.id as scan_id, s.scanned_at, (SELECT count(*) FROM scans s2 WHERE s2.record_id=r.id) scan_count, strftime('%Y-%m-%d', s.scanned_at, '+' || ? || ' hours') day FROM records r LEFT JOIN scans s ON s.record_id = r.id WHERE r.id = ? ORDER BY s.scanned_at DESC LIMIT ? OFFSET ?`).bind(offset,session.record_id,size+1,(page-1)*size).all();
+   return json({items:rows.results.slice(0,size),hasMore:rows.results.length>size});
   }
   const {search,from,to}=filters(url);
   const offset=getCairoOffsetHours();
