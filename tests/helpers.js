@@ -10,6 +10,8 @@ export async function createApi(options={}) {
  const db=await mf.getD1Database('DB');
  const sql=await readFile(new URL('../migrations/0001_initial.sql',import.meta.url),'utf8');
  for(const statement of sql.split(';').map(s=>s.trim()).filter(Boolean))await db.prepare(statement).run();
+ const sql2=await readFile(new URL('../migrations/0002_guest_passwords.sql',import.meta.url),'utf8');
+ for(const statement of sql2.split(';').map(s=>s.trim()).filter(Boolean))await db.prepare(statement).run();
  return {mf,db};
 }
 

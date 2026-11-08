@@ -55,3 +55,76 @@ test('password change security: permissions, old password verification, and role
  assert.equal(newAdminRes.status,200);
  assert.equal(newAdminRes.data.role,'admin');
 });
+test('guest pass generation, scoped login, and strict guest data isolation',async()=>{
+ await db.prepare('DELETE FROM rate_limits').run();
+ const currentAdminToken=(await request('/api/login',{method:'POST',body:{code:'newAdminPass123'}})).data.token;
+ // 1. Create two separate guest records with admin
+ const g1Res=await request('/api/records',{token:currentAdminToken,method:'POST',body:{name:'Laila Nile',mobile:'+201011112222'}});
+ const g2Res=await request('/api/records',{token:currentAdminToken,method:'POST',body:{name:'Tarek Oasis',mobile:'+201033334444'}});
+ assert.equal(g1Res.status,201);
+ assert.equal(g2Res.status,201);
+ const guest1=g1Res.data;
+ const guest2=g2Res.data;
+ assert.match(guest1.view_code,/^guest_[2-9a-km-z]{8}$/);
+ assert.match(guest2.view_code,/^guest_[2-9a-km-z]{8}$/);
+ assert.notEqual(guest1.view_code,guest2.view_code);
+ assert.equal(guest1.view_code_hash,undefined);
+
+ // Record a scan for guest 1
+ await request('/api/scan',{method:'POST',body:{token:guest1.token,eventId:crypto.randomUUID()}});
+
+ // 2. Guest 1 logs in with their pass
+ const login1=await request('/api/login',{method:'POST',body:{code:guest1.view_code}});
+ assert.equal(login1.status,200);
+ assert.equal(login1.data.role,'viewer');
+ assert.equal(login1.data.record_id,guest1.id);
+ assert.equal(login1.data.guestName,'Laila Nile');
+ const token1=login1.data.token;
+
+ // 3. Guest 1 checks session
+ const session1=await request('/api/session',{token:token1});
+ assert.equal(session1.status,200);
+ assert.equal(session1.data.role,'viewer');
+ assert.equal(session1.data.record_id,guest1.id);
+ assert.equal(session1.data.guestName,'Laila Nile');
+
+ // 4. Guest 1 fetches records: MUST ONLY RETURN GUEST 1's record!
+ const records1=await request('/api/records',{token:token1});
+ assert.equal(records1.status,200);
+ assert.equal(records1.data.items.length,1);
+ assert.equal(records1.data.items[0].id,guest1.id);
+ assert.equal(records1.data.items[0].name,'Laila Nile');
+ assert.equal(records1.data.items[0].mobile,undefined); // No PII leakage
+ assert.equal(records1.data.items[0].token,undefined);
+ assert.equal(records1.data.items[0].scan_count,1);
+
+ // 5. Guest 1 fetches stats: MUST ONLY REFLECT GUEST 1's stats!
+ const stats1=await request('/api/stats',{token:token1});
+ assert.equal(stats1.status,200);
+ assert.equal(stats1.data.records,1);
+ assert.equal(stats1.data.scans,1);
+ assert.equal(stats1.data.visited,1);
+
+ // 6. Guest 1 can view their own scan history
+ const scans1=await request(`/api/records/${guest1.id}/scans`,{token:token1});
+ assert.equal(scans1.status,200);
+ assert.equal(scans1.data.items.length,1);
+
+ // 7. Strict cross-tenant isolation: Guest 1 CANNOT view Guest 2's scan history!
+ const scans2Blocked=await request(`/api/records/${guest2.id}/scans`,{token:token1});
+ assert.equal(scans2Blocked.status,403);
+
+ // 8. Guest 1 cannot perform administrator actions
+ assert.equal((await request('/api/records',{token:token1,method:'POST',body:{name:'Hacker'}})).status,403);
+ assert.equal((await request(`/api/records/${guest1.id}`,{token:token1,method:'PUT',body:{name:'Hacked',active:true}})).status,403);
+ assert.equal((await request(`/api/records/${guest1.id}`,{token:token1,method:'DELETE'})).status,403);
+ assert.equal((await request('/api/export',{token:token1})).status,403);
+ assert.equal((await request('/api/copy',{token:token1,method:'PUT',body:{khan:'test',kayak:'test'}})).status,403);
+ assert.equal((await request('/api/password',{token:token1,method:'POST',body:{target:'viewer',currentCode:guest1.view_code,newCode:'pass12345'}})).status,403);
+
+ // 9. When admin deactivates guest 1, login is blocked and session is invalidated
+ await request(`/api/records/${guest1.id}`,{token:currentAdminToken,method:'PUT',body:{name:guest1.name,mobile:guest1.mobile,active:false}});
+ assert.equal((await request('/api/session',{token:token1})).status,401);
+ const disabledLogin=await request('/api/login',{method:'POST',body:{code:guest1.view_code}});
+ assert.equal(disabledLogin.status,403);
+});

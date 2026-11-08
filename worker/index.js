@@ -1,5 +1,10 @@
 import {validateRecord, csv, DEFAULT_COPY} from '../src/shared.js';
 const enc = new TextEncoder();
+const PASS_ALPHABET = '23456789abcdefghjkmnpqrstuvwxyz';
+export function generateViewPass() {
+ const bytes = crypto.getRandomValues(new Uint8Array(8));
+ return 'guest_' + Array.from(bytes, b => PASS_ALPHABET[b % PASS_ALPHABET.length]).join('');
+}
 export async function digest(value) {return Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', enc.encode(value))), b => b.toString(16).padStart(2, '0')).join('');}
 export async function passwordHash(value, salt) {
  const key = await crypto.subtle.importKey('raw', enc.encode(value), 'PBKDF2', false, ['deriveBits']);
@@ -18,7 +23,7 @@ async function limit(env,key,max,seconds) {
 async function auth(req,env,admin=false) {
  const token=req.headers.get('Authorization')?.replace(/^Bearer /,'');
  if(!token || token.length>200) fail('Please sign in.',401);
- const session=await env.DB.prepare('SELECT role FROM sessions WHERE hash=? AND expires_at>?').bind(await digest(token),Date.now()).first();
+ const session=await env.DB.prepare('SELECT role, record_id FROM sessions WHERE hash=? AND expires_at>?').bind(await digest(token),Date.now()).first();
  if(!session) fail('Your session expired. Please sign in again.',401);
  if(admin && session.role!=='admin') fail('Administrator access required.',403);
  return session;
@@ -49,20 +54,40 @@ async function route(req,env) {
   if(!env.PASSWORD_SALT || !env.ADMIN_CODE_HASH || !env.VIEWER_CODE_HASH) fail('Sign-in has not been configured.',503);
   const {code}=await body(req); if(typeof code!=='string'||!code||code.length>200) fail('Enter your access code.');
   const ip=req.headers.get('CF-Connecting-IP')||'local';
-  await limit(env,'login:'+await digest(env.PASSWORD_SALT+ip),10,900);
-  const hash=await passwordHash(code,env.PASSWORD_SALT);
+  const limitKey='login:'+await digest(env.PASSWORD_SALT+ip);
+  await limit(env,limitKey,10,900);
+  const hash=await passwordHash(code.trim(),env.PASSWORD_SALT);
   const {adminHash, viewerHash}=await getCodeHashes(env);
-  const role=equal(hash,adminHash)?'admin':equal(hash,viewerHash)?'viewer':null;
+  let role=equal(hash,adminHash)?'admin':equal(hash,viewerHash)?'viewer':null;
+  let recordId=null, guestName=null;
+  if(!role) {
+   const guest=await env.DB.prepare('SELECT id, name, active FROM records WHERE view_code_hash=?').bind(hash).first();
+   if(guest) {
+    if(!guest.active) fail('This invitation has been disabled.',403);
+    role='viewer';
+    recordId=guest.id;
+    guestName=guest.name;
+   }
+  }
   if(!role) fail('Access code not recognized.',401);
   const token=crypto.randomUUID()+crypto.randomUUID(); const expiresAt=Date.now()+8*3600*1000;
   await env.DB.batch([
+   env.DB.prepare('DELETE FROM rate_limits WHERE key=?').bind(limitKey),
    env.DB.prepare('DELETE FROM sessions WHERE expires_at<?').bind(Date.now()),
    env.DB.prepare('DELETE FROM rate_limits WHERE expires_at<?').bind(Date.now()),
-   env.DB.prepare('INSERT INTO sessions(hash,role,expires_at) VALUES(?,?,?)').bind(await digest(token),role,expiresAt)
+   env.DB.prepare('INSERT INTO sessions(hash,role,expires_at,record_id) VALUES(?,?,?,?)').bind(await digest(token),role,expiresAt,recordId)
   ]);
-  return json({token,role,expiresAt});
+  return json({token,role,record_id:recordId,guestName,expiresAt});
  }
- if(path==='/api/session'&&method==='GET') return json(await auth(req,env));
+ if(path==='/api/session'&&method==='GET') {
+  const session=await auth(req,env);
+  if(session.record_id) {
+   const rec=await env.DB.prepare('SELECT name, active FROM records WHERE id=?').bind(session.record_id).first();
+   if(!rec || !rec.active) fail('This invitation is no longer active.',401);
+   return json({role:session.role,record_id:session.record_id,guestName:rec.name});
+  }
+  return json({role:session.role});
+ }
  if(path==='/api/logout'&&method==='POST') {
   await auth(req,env); await env.DB.prepare('DELETE FROM sessions WHERE hash=?').bind(await digest(req.headers.get('Authorization').slice(7))).run(); return json({ok:true});
  }
@@ -108,11 +133,19 @@ async function route(req,env) {
  }
  if(path==='/api/records'&&method==='POST') {
   await auth(req,env,true); const data=validateRecord(await body(req));
-  const record={id:crypto.randomUUID(),token:Array.from(crypto.getRandomValues(new Uint8Array(24)),b=>b.toString(16).padStart(2,'0')).join(''),...data,active:1,created_at:new Date().toISOString()};
-  await env.DB.prepare('INSERT INTO records(id,token,name,mobile,created_at) VALUES(?,?,?,?,?)').bind(record.id,record.token,record.name,record.mobile,record.created_at).run();return json(record,201);
+  const view_code=generateViewPass();
+  const view_code_hash=await passwordHash(view_code,env.PASSWORD_SALT);
+  const record={id:crypto.randomUUID(),token:Array.from(crypto.getRandomValues(new Uint8Array(24)),b=>b.toString(16).padStart(2,'0')).join(''),...data,active:1,created_at:new Date().toISOString(),view_code};
+  await env.DB.prepare('INSERT INTO records(id,token,name,mobile,created_at,view_code,view_code_hash) VALUES(?,?,?,?,?,?,?)').bind(record.id,record.token,record.name,record.mobile,record.created_at,view_code,view_code_hash).run();
+  return json(record,201);
  }
  if(path==='/api/records'&&method==='GET') {
-  const session=await auth(req,env); const {search,from,to}=filters(url);
+  const session=await auth(req,env);
+  if(session.record_id) {
+   const rows=await env.DB.prepare('SELECT r.id, r.name, r.active, r.created_at, (SELECT count(*) FROM scans s WHERE s.record_id=r.id) scan_count, (SELECT max(scanned_at) FROM scans s WHERE s.record_id=r.id) last_scan FROM records r WHERE r.id=?').bind(session.record_id).all();
+   return json({items:rows.results||[],hasMore:false});
+  }
+  const {search,from,to}=filters(url);
   const page=Math.max(1,Math.min(100000,Number.parseInt(url.searchParams.get('page'))||1)); const size=20;
   if(session.role==='viewer') {
    const where="instr(lower(r.name),lower(?))>0 AND ((?='' AND ?='') OR EXISTS(SELECT 1 FROM scans s WHERE s.record_id=r.id AND (?='' OR s.scanned_at>=?) AND (?='' OR s.scanned_at<=?)))";
@@ -122,26 +155,47 @@ async function route(req,env) {
   }
   const where="(instr(lower(r.name),lower(?))>0 OR instr(r.mobile,?)>0) AND ((?='' AND ?='') OR EXISTS(SELECT 1 FROM scans s WHERE s.record_id=r.id AND (?='' OR s.scanned_at>=?) AND (?='' OR s.scanned_at<=?)))";
   const params=[search,search,from,to,from,from+'T00:00:00.000Z',to,to+'T23:59:59.999Z'];
-  const rows=await env.DB.prepare(`SELECT r.*, (SELECT count(*) FROM scans s WHERE s.record_id=r.id) scan_count, (SELECT max(scanned_at) FROM scans s WHERE s.record_id=r.id) last_scan FROM records r WHERE ${where} ORDER BY r.created_at DESC LIMIT ? OFFSET ?`).bind(...params,size+1,(page-1)*size).all();
-  return json({items:rows.results.slice(0,size),hasMore:rows.results.length>size});
+  const rows=await env.DB.prepare(`SELECT r.id, r.token, r.name, r.mobile, r.active, r.created_at, r.view_code, (SELECT count(*) FROM scans s WHERE s.record_id=r.id) scan_count, (SELECT max(scanned_at) FROM scans s WHERE s.record_id=r.id) last_scan FROM records r WHERE ${where} ORDER BY r.created_at DESC LIMIT ? OFFSET ?`).bind(...params,size+1,(page-1)*size).all();
+  const items=rows.results.slice(0,size);
+  for(const item of items) {
+   if(!item.view_code) {
+    item.view_code=generateViewPass();
+    const hash=await passwordHash(item.view_code,env.PASSWORD_SALT);
+    await env.DB.prepare('UPDATE records SET view_code=?, view_code_hash=? WHERE id=?').bind(item.view_code,hash,item.id).run();
+   }
+  }
+  return json({items,hasMore:rows.results.length>size});
  }
  if(path==='/api/stats'&&method==='GET') {
-  await auth(req,env);
+  const session=await auth(req,env);
+  const cutoff=new Date(Date.now()-13*86400000).toISOString().slice(0,10);
+  if(session.record_id) {
+   const scansCount=(await env.DB.prepare('SELECT count(*) c FROM scans WHERE record_id=?').bind(session.record_id).first())?.c||0;
+   const rec=await env.DB.prepare('SELECT active FROM records WHERE id=?').bind(session.record_id).first();
+   const days=await env.DB.prepare("SELECT substr(scanned_at,1,10) day,count(*) count FROM scans WHERE record_id=? AND scanned_at>=? GROUP BY day ORDER BY day").bind(session.record_id,cutoff).all();
+   return json({records:1,scans:scansCount,visited:scansCount>0?1:0,active:rec?.active?1:0,days:days.results||[]});
+  }
   const summary=await env.DB.prepare('SELECT (SELECT count(*) FROM records) records,(SELECT count(*) FROM scans) scans,(SELECT count(DISTINCT record_id) FROM scans) visited,(SELECT count(*) FROM records WHERE active=1) active').first();
-  const days=await env.DB.prepare("SELECT substr(scanned_at,1,10) day,count(*) count FROM scans WHERE scanned_at>=? GROUP BY day ORDER BY day").bind(new Date(Date.now()-13*86400000).toISOString().slice(0,10)).all();return json({...summary,days:days.results});
+  const days=await env.DB.prepare("SELECT substr(scanned_at,1,10) day,count(*) count FROM scans WHERE scanned_at>=? GROUP BY day ORDER BY day").bind(cutoff).all();
+  return json({...summary,days:days.results});
  }
  if(path==='/api/export'&&method==='GET') {
   await auth(req,env,true);
   // Paginate exports: never silently truncate a growing database.
   const after=url.searchParams.get('after')||'';
-  const rows=await env.DB.prepare('SELECT r.*, (SELECT count(*) FROM scans s WHERE s.record_id=r.id) scan_count,(SELECT max(scanned_at) FROM scans s WHERE s.record_id=r.id) last_scan FROM records r WHERE r.id>? ORDER BY r.id LIMIT 501').bind(after).all();
+  const rows=await env.DB.prepare('SELECT r.id, r.token, r.name, r.mobile, r.active, r.created_at, r.view_code, (SELECT count(*) FROM scans s WHERE s.record_id=r.id) scan_count,(SELECT max(scanned_at) FROM scans s WHERE s.record_id=r.id) last_scan FROM records r WHERE r.id>? ORDER BY r.id LIMIT 501').bind(after).all();
   const items=rows.results.slice(0,500); return json({items,next:rows.results.length>500?items.at(-1).id:null});
  }
  const match=path.match(/^\/api\/records\/([a-f0-9-]{36})(\/scans)?$/);
  if(match) {
-  await auth(req,env,true); const id=match[1];
+  const id=match[1];
+  const isScansGet=match[2]&&method==='GET';
+  const session=await auth(req,env,!isScansGet);
+  if(isScansGet && session.role!=='admin') {
+   if(!session.record_id || session.record_id!==id) fail('Administrator access required.',403);
+  }
   const existing=await env.DB.prepare('SELECT * FROM records WHERE id=?').bind(id).first();if(!existing) fail('Record not found.',404);
-  if(match[2]&&method==='GET') {
+  if(isScansGet) {
    const page=Math.max(1,Number.parseInt(url.searchParams.get('page'))||1);
    const rows=await env.DB.prepare('SELECT scanned_at FROM scans WHERE record_id=? ORDER BY scanned_at DESC LIMIT 51 OFFSET ?').bind(id,(page-1)*50).all();return json({items:rows.results.slice(0,50),hasMore:rows.results.length>50});
   }

@@ -71,6 +71,50 @@ test('admin can open security modal and change access codes with validation',asy
   await page.locator('#password-form button[type=submit]').click();
   await expect(page.locator('#toast')).toContainText('updated');
 });
+test('guest viewing pass generation and strict isolated guest dashboard',async({page})=>{
+  // 1. Admin creates guest
+  await signIn(page,'local-admin-demo','builder');
+  const guestName='Private Guest '+Date.now();
+  await page.getByLabel('Guest name').fill(guestName);
+  await page.getByRole('button',{name:'Generate QR code'}).click();
+  await expect(page.locator('#qr-preview canvas')).toBeVisible();
+
+  // 2. Guest viewing pass is generated and displayed
+  const passBox=page.locator('.guest-pass-card');
+  await expect(passBox).toBeVisible();
+  const passCodeEl=page.locator('#qr-preview .pass-code');
+  await expect(passCodeEl).toBeVisible();
+  const passCode=(await passCodeEl.textContent()).trim();
+  expect(passCode).toMatch(/^guest_[2-9a-km-z]{8}$/);
+
+  // 3. Admin goes to dashboard, opens guest modal, verifies pass is also there
+  await page.getByRole('link',{name:/Dashboard/}).click();
+  const manageBtn=page.getByRole('button',{name:'Manage '+guestName});
+  await manageBtn.scrollIntoViewIfNeeded();
+  await manageBtn.click();
+  await expect(page.locator('dialog .pass-code')).toHaveText(passCode);
+  await page.getByRole('button',{name:'Close dialog'}).click();
+
+  // 4. Sign out
+  await page.getByRole('button',{name:/Sign out/}).click();
+
+  // 5. Guest signs in with their private viewing pass
+  await page.locator('#code').fill(passCode);
+  await page.getByRole('button',{name:'Enter workspace'}).click();
+
+  // 6. Guest dashboard loads in scoped mode
+  await expect(page.locator('h1')).toContainText(guestName);
+  await expect(page.locator('.pill')).toHaveText('Personal guest access');
+  await expect(page.locator('.directory-head h2')).toHaveText('Your invitation activity');
+
+  // Verify only their record is displayed, and admin controls are absent
+  await expect(page.locator('#records table tbody tr')).toHaveCount(1);
+  await expect(page.locator('#records')).toContainText(guestName);
+  await expect(page.locator('#change-passwords')).toHaveCount(0);
+  await expect(page.locator('#export')).toHaveCount(0);
+  await expect(page.locator('#filters')).toBeHidden();
+  await expect(page.getByRole('link',{name:'QR builder'})).toHaveCount(0);
+});
 
 
 
