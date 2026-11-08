@@ -1,6 +1,6 @@
 export const AIRBNB_URL = 'https://www.airbnb.com/experiences/6840710';
 export const DEFAULT_COPY = {
- khan: 'Wander through Cairo’s storied markets with a local companion. Discover traditional scents, unique finds, and the atmosphere of Khan El Khalili. Explore the full experience and booking details on Airbnb.',
+ khan: 'Your personal Cairo shopping buddy.\nTell me what you want to find and we explore markets at an unrushed pace. I negotiate true local prices, avoid traps, and treat you to authentic Egyptian Meal.',
  kayak: 'A different rhythm of Cairo is coming. Join us for a kayaking experience on Egypt’s Nile and discover the city from the water. Full details will be announced soon.'
 };
 export function validateRecord(value) {
