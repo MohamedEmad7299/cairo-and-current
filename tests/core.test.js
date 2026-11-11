@@ -18,23 +18,18 @@ test('QR works under a GitHub repository path and decodes independently',async()
  assert.equal(jsQR(new Uint8ClampedArray(png.data),png.width,png.height).data,url);
  assert.ok(!url.includes('mobile'));
 });
-test('QR code with center logo occlusion decodes accurately with error correction level H',async()=>{
+test('QR code with center logo occlusion decodes accurately with error correction level M',async()=>{
  assert.ok(AIRBNB_LOGO_PATH && AIRBNB_LOGO_PATH.startsWith('M12.001'));
  const url=qrUrl('https://mohamedemad7299.github.io/cairo-and-current/','token_1234567890abcdef');
  const width=480;
- const png=PNG.sync.read(await QRCode.toBuffer(url,{width,margin:4,errorCorrectionLevel:'H',color:{dark:'#152e2b',light:'#ffffff'}}));
- const centerSize=Math.round(width*0.22);
- const cx=Math.round((width-centerSize)/2);
- const cy=Math.round((width-centerSize)/2);
- const radius=Math.round(centerSize*0.22);
- for(let y=cy;y<cy+centerSize;y++){
-  for(let x=cx;x<cx+centerSize;x++){
-   const dx=Math.max(0,Math.max(cx+radius-x,x-(cx+centerSize-radius)));
-   const dy=Math.max(0,Math.max(cy+radius-y,y-(cy+centerSize-radius)));
-   if(dx*dx+dy*dy<=radius*radius){
-    const idx=(y*width+x)*4;
-    png.data[idx]=255;png.data[idx+1]=255;png.data[idx+2]=255;png.data[idx+3]=255;
-   }
+ const png=PNG.sync.read(await QRCode.toBuffer(url,{width,margin:4,errorCorrectionLevel:'M',color:{dark:'#152e2b',light:'#ffffff'}}));
+ const logoSize=Math.round(width*0.18);
+ const cx=Math.round((width-logoSize)/2);
+ const cy=Math.round((width-logoSize)/2);
+ for(let y=cy;y<cy+logoSize;y++){
+  for(let x=cx;x<cx+logoSize;x++){
+   const idx=(y*width+x)*4;
+   png.data[idx]=255;png.data[idx+1]=255;png.data[idx+2]=255;png.data[idx+3]=255;
   }
  }
  const decoded=jsQR(new Uint8ClampedArray(png.data),width,width);

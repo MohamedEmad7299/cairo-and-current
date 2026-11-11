@@ -6,7 +6,7 @@ const API=import.meta.env.VITE_API_URL || (import.meta.env.DEV?'http://127.0.0.1
 let session=null,copy={...DEFAULT_COPY},page=1,records=[],lastQR=null,routeVersion=0;
 try {session=JSON.parse(sessionStorage.getItem('cc-session'));}catch{}
 const icon=(type)=>({arrow:'↗',qr:'▦',dashboard:'◫',logout:'↪',wave:'≈',plus:'＋'}[type]||type);
-const QR_LOGO_COLOR='#cba674';
+const QR_LOGO_COLOR='#e2bf87';
 const airbnbLogoSvg=`<span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="currentColor"><path d="${AIRBNB_LOGO_PATH}"/></svg></span>`;
 const brand=`<a class="brand" href="#/tours" aria-label="Airbnb Experiences home">${airbnbLogoSvg}<span>Airbnb Experiences<small>TIMELESS HERITAGE. LIVING CULTURE.</small></span></a>`;
 const time=v=>v?new Intl.DateTimeFormat('en-GB',{dateStyle:'medium',timeStyle:'short',timeZone:'Africa/Cairo'}).format(new Date(v)):'Not scanned yet';
@@ -53,56 +53,50 @@ function tours(token){
 }
 function drawLogoOnCanvas(canvas){
  const ctx=canvas.getContext('2d');
- const centerSize=Math.round(canvas.width*0.22);
- const cx=(canvas.width-centerSize)/2;
- const cy=(canvas.height-centerSize)/2;
- const radius=Math.round(centerSize*0.22);
- ctx.save();
- ctx.fillStyle='#ffffff';
- if(ctx.roundRect){
-  ctx.beginPath();
-  ctx.roundRect(cx,cy,centerSize,centerSize,radius);
-  ctx.fill();
- }else{
-  ctx.beginPath();
-  ctx.moveTo(cx+radius,cy);
-  ctx.arcTo(cx+centerSize,cy,cx+centerSize,cy+centerSize,radius);
-  ctx.arcTo(cx+centerSize,cy+centerSize,cx,cy+centerSize,radius);
-  ctx.arcTo(cx,cy+centerSize,cx,cy,radius);
-  ctx.arcTo(cx,cy,cx+centerSize,cy,radius);
-  ctx.closePath();
-  ctx.fill();
- }
- const padding=centerSize*0.16;
- const logoSize=centerSize-(padding*2);
+ const logoSize=canvas.width*0.18;
+ const cx=(canvas.width-logoSize)/2;
+ const cy=(canvas.height-logoSize)/2;
  const scale=logoSize/24;
- ctx.translate(cx+padding,cy+padding);
+ const path=new Path2D(AIRBNB_LOGO_PATH);
+
+ ctx.save();
+ ctx.translate(cx,cy);
  ctx.scale(scale,scale);
+
+ // White contour halo matching the exact Airbnb silhouette (no background box or circle)
+ ctx.strokeStyle='#ffffff';
+ ctx.lineWidth=3.4;
+ ctx.lineJoin='round';
+ ctx.lineCap='round';
+ ctx.stroke(path);
+
+ // Fill loop opening with white so inner QR dots don't clash
+ ctx.fillStyle='#ffffff';
+ ctx.fill(path);
+
+ // Draw logo on top in exact sand/gold color
  ctx.fillStyle=QR_LOGO_COLOR;
- ctx.fill(new Path2D(AIRBNB_LOGO_PATH));
+ ctx.fill(path);
  ctx.restore();
 }
 async function generateQRSvg(url){
- let svg=await QRCode.toString(url,{type:'svg',margin:4,errorCorrectionLevel:'H',color:{dark:'#152e2b',light:'#ffffff'}});
+ let svg=await QRCode.toString(url,{type:'svg',margin:4,errorCorrectionLevel:'M',color:{dark:'#152e2b',light:'#ffffff'}});
  const match=svg.match(/viewBox="0 0 (\d+) (\d+)"/);
  if(match){
   const size=Number(match[1]);
-  const centerSize=Number((size*0.22).toFixed(2));
-  const cx=Number(((size-centerSize)/2).toFixed(2));
-  const cy=Number(((size-centerSize)/2).toFixed(2));
-  const rx=Number((centerSize*0.22).toFixed(2));
-  const padding=Number((centerSize*0.16).toFixed(2));
-  const logoSize=Number((centerSize-padding*2).toFixed(2));
-  const scale=Number((logoSize/24).toFixed(4));
-  const badge=`<rect x="${cx}" y="${cy}" width="${centerSize}" height="${centerSize}" rx="${rx}" fill="#ffffff"/><g transform="translate(${cx+padding}, ${cy+padding}) scale(${scale})"><path fill="${QR_LOGO_COLOR}" d="${AIRBNB_LOGO_PATH}"/></g>`;
-  svg=svg.replace('</svg>',`${badge}</svg>`);
+  const logoModules=size*0.18;
+  const scale=Number((logoModules/24).toFixed(4));
+  const cx=Number(((size-logoModules)/2).toFixed(3));
+  const cy=Number(((size-logoModules)/2).toFixed(3));
+  const logoGroup=`<g transform="translate(${cx}, ${cy}) scale(${scale})"><path d="${AIRBNB_LOGO_PATH}" fill="#ffffff" stroke="#ffffff" stroke-width="3.4" stroke-linejoin="round" stroke-linecap="round"/><path d="${AIRBNB_LOGO_PATH}" fill="${QR_LOGO_COLOR}"/></g>`;
+  svg=svg.replace('</svg>',`${logoGroup}</svg>`);
  }
  return svg;
 }
 async function showQR(record,target='qr-preview') {
  lastQR=record;const targetEl=document.getElementById(target);if(!targetEl)return;
  const url=qrUrl(location.href.split('#')[0],record.token);
- const canvas=document.createElement('canvas');await QRCode.toCanvas(canvas,url,{width:480,margin:4,errorCorrectionLevel:'H',color:{dark:'#152e2b',light:'#ffffff'}});
+ const canvas=document.createElement('canvas');await QRCode.toCanvas(canvas,url,{width:480,margin:4,errorCorrectionLevel:'M',color:{dark:'#152e2b',light:'#ffffff'}});
  drawLogoOnCanvas(canvas);
  targetEl.innerHTML=`<span class="eyebrow">YOUR INVITATION IS READY</span><div class="qr-art"></div><h3>${h(record.name)}</h3><p>Scan. Discover. Make a memory.</p><div class="qr-actions"><button id="download-png">PNG ↓</button><button id="download-svg">SVG ↓</button><button id="print-qr">Print ↗</button></div><button class="text-button" id="copy-link">Copy invitation link</button>${record.view_code?`<div class="guest-pass-card"><span class="pass-label">GUEST DASHBOARD ACCESS PASS</span><div class="pass-row"><code class="pass-code">${h(record.view_code)}</code><button type="button" class="copy-pass-btn" id="copy-guest-pass">Copy pass 📋</button></div><p class="pass-note">Share this pass with <strong>${h(record.name)}</strong> to view their visits securely. No other guest data is shown.</p></div>`:''}<p class="fine">Reusable · No automatic expiry</p>`;targetEl.querySelector('.qr-art').append(canvas);
  bind('download-png','click',()=>canvas.toBlob(blob=>download(blob,'cairo-current-invitation.png')));
