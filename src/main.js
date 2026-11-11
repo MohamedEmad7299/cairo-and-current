@@ -1,12 +1,13 @@
 import QRCode from 'qrcode';
-import {AIRBNB_URL, DEFAULT_COPY, validateRecord, qrUrl, escapeHtml as h, csv} from './shared.js';
+import {AIRBNB_URL, AIRBNB_LOGO_PATH, DEFAULT_COPY, validateRecord, qrUrl, escapeHtml as h, csv} from './shared.js';
 import './style.css';
 const root=document.querySelector('#app'),modal=document.querySelector('#modal');
 const API=import.meta.env.VITE_API_URL || (import.meta.env.DEV?'http://127.0.0.1:8787':'https://cairo-and-current-api.cairo-and-current.workers.dev');
 let session=null,copy={...DEFAULT_COPY},page=1,records=[],lastQR=null,routeVersion=0;
 try {session=JSON.parse(sessionStorage.getItem('cc-session'));}catch{}
 const icon=(type)=>({arrow:'↗',qr:'▦',dashboard:'◫',logout:'↪',wave:'≈',plus:'＋'}[type]||type);
-const airbnbLogoSvg=`<span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M12.001 18.275c-1.353-1.697-2.148-3.184-2.413-4.457-.263-1.027-.16-1.848.291-2.465.477-.71 1.188-1.056 2.121-1.056s1.643.345 2.12 1.063c.446.61.558 1.432.286 2.465-.291 1.298-1.085 2.785-2.412 4.458zm9.601 1.14c-.185 1.246-1.034 2.28-2.2 2.783-2.253.98-4.483-.583-6.392-2.704 3.157-3.951 3.74-7.028 2.385-9.018-.795-1.14-1.933-1.695-3.394-1.695-2.944 0-4.563 2.49-3.927 5.382.37 1.565 1.352 3.343 2.917 5.332-.98 1.085-1.91 1.856-2.732 2.333-.636.344-1.245.558-1.828.609-2.679.399-4.778-2.2-3.825-4.88.132-.345.395-.98.845-1.961l.025-.053c1.464-3.178 3.242-6.79 5.285-10.795l.053-.132.58-1.116c.45-.822.635-1.19 1.351-1.643.346-.21.77-.315 1.246-.315.954 0 1.698.558 2.016 1.007.158.239.345.557.582.953l.558 1.089.08.159c2.041 4.004 3.821 7.608 5.279 10.794l.026.025.533 1.22.318.764c.243.613.294 1.222.213 1.858zm1.22-2.39c-.186-.583-.505-1.271-.9-2.094v-.03c-1.889-4.006-3.642-7.608-5.307-10.844l-.111-.163C15.317 1.461 14.468 0 12.001 0c-2.44 0-3.476 1.695-4.535 3.898l-.081.16c-1.669 3.236-3.421 6.843-5.303 10.847v.053l-.559 1.22c-.21.504-.317.768-.345.847C-.172 20.74 2.611 24 5.98 24c.027 0 .132 0 .265-.027h.372c1.75-.213 3.554-1.325 5.384-3.317 1.829 1.989 3.635 3.104 5.382 3.317h.372c.133.027.239.027.265.027 3.37.003 6.152-3.261 4.802-6.975z"/></svg></span>`;
+const QR_LOGO_COLOR='#cba674';
+const airbnbLogoSvg=`<span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="currentColor"><path d="${AIRBNB_LOGO_PATH}"/></svg></span>`;
 const brand=`<a class="brand" href="#/tours" aria-label="Airbnb Experiences home">${airbnbLogoSvg}<span>Airbnb Experiences<small>TIMELESS HERITAGE. LIVING CULTURE.</small></span></a>`;
 const time=v=>v?new Intl.DateTimeFormat('en-GB',{dateStyle:'medium',timeStyle:'short',timeZone:'Africa/Cairo'}).format(new Date(v)):'Not scanned yet';
 function toast(message){const el=document.querySelector('#toast');el.textContent=message;el.classList.add('show');clearTimeout(toast.timer);toast.timer=setTimeout(()=>el.classList.remove('show'),5000);}
@@ -50,13 +51,62 @@ function tours(token){
  if(token){const status=document.querySelector('#scan-status');const eventId=crypto.randomUUID();api('/api/scan',{method:'POST',body:JSON.stringify({token,eventId})}).catch(err=>{if(!status.isConnected)return;status.textContent=err.status===404?'This invitation is no longer active. You can still explore our experiences.':'Your visit could not be recorded. You can still explore our experiences.';});}
  api('/api/copy').then(data=>{copy=data;for(const key of ['khan','kayak']){const el=document.getElementById(`${key}-description`);if(el)el.textContent=copy[key];}}).catch(()=>{});
 }
+function drawLogoOnCanvas(canvas){
+ const ctx=canvas.getContext('2d');
+ const centerSize=Math.round(canvas.width*0.22);
+ const cx=(canvas.width-centerSize)/2;
+ const cy=(canvas.height-centerSize)/2;
+ const radius=Math.round(centerSize*0.22);
+ ctx.save();
+ ctx.fillStyle='#ffffff';
+ if(ctx.roundRect){
+  ctx.beginPath();
+  ctx.roundRect(cx,cy,centerSize,centerSize,radius);
+  ctx.fill();
+ }else{
+  ctx.beginPath();
+  ctx.moveTo(cx+radius,cy);
+  ctx.arcTo(cx+centerSize,cy,cx+centerSize,cy+centerSize,radius);
+  ctx.arcTo(cx+centerSize,cy+centerSize,cx,cy+centerSize,radius);
+  ctx.arcTo(cx,cy+centerSize,cx,cy,radius);
+  ctx.arcTo(cx,cy,cx+centerSize,cy,radius);
+  ctx.closePath();
+  ctx.fill();
+ }
+ const padding=centerSize*0.16;
+ const logoSize=centerSize-(padding*2);
+ const scale=logoSize/24;
+ ctx.translate(cx+padding,cy+padding);
+ ctx.scale(scale,scale);
+ ctx.fillStyle=QR_LOGO_COLOR;
+ ctx.fill(new Path2D(AIRBNB_LOGO_PATH));
+ ctx.restore();
+}
+async function generateQRSvg(url){
+ let svg=await QRCode.toString(url,{type:'svg',margin:4,errorCorrectionLevel:'H',color:{dark:'#152e2b',light:'#ffffff'}});
+ const match=svg.match(/viewBox="0 0 (\d+) (\d+)"/);
+ if(match){
+  const size=Number(match[1]);
+  const centerSize=Number((size*0.22).toFixed(2));
+  const cx=Number(((size-centerSize)/2).toFixed(2));
+  const cy=Number(((size-centerSize)/2).toFixed(2));
+  const rx=Number((centerSize*0.22).toFixed(2));
+  const padding=Number((centerSize*0.16).toFixed(2));
+  const logoSize=Number((centerSize-padding*2).toFixed(2));
+  const scale=Number((logoSize/24).toFixed(4));
+  const badge=`<rect x="${cx}" y="${cy}" width="${centerSize}" height="${centerSize}" rx="${rx}" fill="#ffffff"/><g transform="translate(${cx+padding}, ${cy+padding}) scale(${scale})"><path fill="${QR_LOGO_COLOR}" d="${AIRBNB_LOGO_PATH}"/></g>`;
+  svg=svg.replace('</svg>',`${badge}</svg>`);
+ }
+ return svg;
+}
 async function showQR(record,target='qr-preview') {
  lastQR=record;const targetEl=document.getElementById(target);if(!targetEl)return;
  const url=qrUrl(location.href.split('#')[0],record.token);
- const canvas=document.createElement('canvas');await QRCode.toCanvas(canvas,url,{width:320,margin:4,errorCorrectionLevel:'M',color:{dark:'#152e2b',light:'#ffffff'}});
+ const canvas=document.createElement('canvas');await QRCode.toCanvas(canvas,url,{width:480,margin:4,errorCorrectionLevel:'H',color:{dark:'#152e2b',light:'#ffffff'}});
+ drawLogoOnCanvas(canvas);
  targetEl.innerHTML=`<span class="eyebrow">YOUR INVITATION IS READY</span><div class="qr-art"></div><h3>${h(record.name)}</h3><p>Scan. Discover. Make a memory.</p><div class="qr-actions"><button id="download-png">PNG ↓</button><button id="download-svg">SVG ↓</button><button id="print-qr">Print ↗</button></div><button class="text-button" id="copy-link">Copy invitation link</button>${record.view_code?`<div class="guest-pass-card"><span class="pass-label">GUEST DASHBOARD ACCESS PASS</span><div class="pass-row"><code class="pass-code">${h(record.view_code)}</code><button type="button" class="copy-pass-btn" id="copy-guest-pass">Copy pass 📋</button></div><p class="pass-note">Share this pass with <strong>${h(record.name)}</strong> to view their visits securely. No other guest data is shown.</p></div>`:''}<p class="fine">Reusable · No automatic expiry</p>`;targetEl.querySelector('.qr-art').append(canvas);
  bind('download-png','click',()=>canvas.toBlob(blob=>download(blob,'cairo-current-invitation.png')));
- bind('download-svg','click',async()=>download(new Blob([await QRCode.toString(url,{type:'svg',margin:4,errorCorrectionLevel:'M'})],{type:'image/svg+xml'}),'cairo-current-invitation.svg'));
+ bind('download-svg','click',async()=>download(new Blob([await generateQRSvg(url)],{type:'image/svg+xml'}),'cairo-current-invitation.svg'));
  bind('copy-link','click',async()=>{try{await navigator.clipboard.writeText(url);toast('Invitation link copied.');}catch{toast('Clipboard unavailable. Download the QR instead.');}});
  if(record.view_code)bind('copy-guest-pass','click',async()=>{try{await navigator.clipboard.writeText(record.view_code);toast('Guest viewing pass copied.');}catch{toast('Clipboard unavailable.');}});
  bind('print-qr','click',()=>{document.querySelector('#print-sheet')?.remove();const sheet=document.createElement('div');sheet.id='print-sheet';sheet.innerHTML=`<h1>Cairo & Current</h1><p>Your invitation to discover Cairo</p><img src="${canvas.toDataURL()}" alt="Scan to explore Cairo"><h2>${h(record.name)}</h2><p>Scan with your phone camera to explore the experiences.</p>${record.view_code?`<div class="print-pass"><p><strong>Dashboard Viewing Pass:</strong> <code>${h(record.view_code)}</code></p><p class="print-sub">Sign in at the dashboard to view your visits privately.</p></div>`:''}`;document.body.append(sheet);window.print();});
